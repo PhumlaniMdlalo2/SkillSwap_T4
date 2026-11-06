@@ -1,0 +1,249 @@
+import React, { useState } from 'react';
+import {
+  View,
+  Text,
+  FlatList,
+  StyleSheet,
+  Pressable,
+  RefreshControl,
+  Platform,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { router } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import Card from '../../components/ui/Card';
+import Avatar from '../../components/ui/Avatar';
+import LoadingSpinner from '../../components/ui/LoadingSpinner';
+import ErrorState from '../../components/ui/ErrorState';
+import { useAuth } from '../../store/useAppHooks';
+import { swapService } from '../../services/swapService';
+import { COLORS, SPACING, FONT_SIZES, RADII } from '../../utils/constants';
+import { timeAgo } from '../../utils/helpers';
+import { confirmAction, notify } from '../../utils/alert';
+import { toUserMessage } from '../../utils/errors';
+
+const TABS = [
+  { key: 'matches', label: 'Matches' },
+  { key: 'right', label: 'Swapped' },
+  { key: 'left', label: 'Passed' },
+];
+
+export default function SwapHistoryScreen() {
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
+  const [tab, setTab] = useState('matches');
+  const [refreshing, setRefreshing] = useState(false);
+  const enabled = Boolean(user);
+  const isMatches = tab === 'matches';
+
+  const {
+    data: history = [],
+    isPending,
+    error,
+    refetch,
+  } = useQuery({
+    queryKey: isMatches ? ['matches', user?.user_id] : ['swipe-history', user?.user_id, tab],
+    queryFn: () =>
+      isMatches ? swapService.fetchMatches(user.user_id) : swapService.fetchSwipeHistory(tab),
+    enabled,
+  });
+
+  const handleUnmatch = (matchId) => {
+    confirmAction(
+      'Unmatch?',
+      "You'll both stop seeing each other as a match, and could reappear in each other's decks later.",
+      {
+        confirmText: 'Unmatch',
+        destructive: true,
+        onConfirm: async () => {
+          try {
+            await swapService.unmatch(matchId);
+            await queryClient.invalidateQueries({ queryKey: ['matches'] });
+            await queryClient.invalidateQueries({ queryKey: ['swipe-history'] });
+          } catch (err) {
+            notify('Could not unmatch', toUserMessage(err));
+          }
+        },
+      },
+    );
+  };
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await refetch();
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  if (isPending) return <LoadingSpinner label="Loading history…" />;
+  if (error) return <ErrorState error={error} onRetry={refetch} />;
+
+  return (
+    <SafeAreaView style={styles.container} edges={['top']}>
+      <View style={styles.header}>
+        <Text style={styles.title} accessibilityRole="header">
+          Swap History
+        </Text>
+        <View style={styles.tabRow}>
+          {TABS.map((t) => (
+            <Pressable
+              key={t.key}
+              onPress={() => setTab(t.key)}
+              accessibilityRole="button"
+              accessibilityState={{ selected: tab === t.key }}
+              style={[styles.tab, tab === t.key && styles.tabActive]}
+            >
+              <Text style={[styles.tabText, tab === t.key && styles.tabTextActive]}>{t.label}</Text>
+            </Pressable>
+          ))}
+        </View>
+      </View>
+
+      <FlatList
+        data={history}
+        keyExtractor={(item) => item.id}
+        contentContainerStyle={styles.listContent}
+        refreshControl={
+          Platform.OS === 'web' ? undefined : (
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={COLORS.primary}
+              colors={[COLORS.primary]}
+            />
+          )
+        }
+        ListEmptyComponent={
+          <Text style={styles.emptyText} accessible>
+            Nothing here yet.
+          </Text>
+        }
+        renderItem={({ item }) => {
+          const person = isMatches ? item.counterpart : item.target;
+          const when = isMatches ? item.matchedAt : item.createdAt;
+          return (
+            <Card
+              style={styles.row}
+              onPress={isMatches ? () => router.push(`/chat/${item.id}`) : undefined}
+            >
+              <Avatar uri={person?.avatar} name={person?.name} size={36} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.name}>{person?.name ?? 'SkillSwap member'}</Text>
+                {isMatches && (
+                  <Text style={styles.chatPromptText}>Tap to open chat</Text>
+                )}
+              </View>
+              <Text style={styles.time}>{timeAgo(when)}</Text>
+              {isMatches && (
+                <View style={styles.matchRowActions}>
+                  <Pressable
+                    onPress={() => router.push(`/chat/${item.id}`)}
+                    accessibilityRole="button"
+                    accessibilityLabel="Chat with match"
+                    hitSlop={12}
+                    style={styles.chatIconBtn}
+                  >
+                    <Ionicons name="chatbubble-ellipses-outline" size={20} color={COLORS.primary} />
+                  </Pressable>
+                  <Pressable
+                    onPress={() => handleUnmatch(item.id)}
+                    accessibilityRole="button"
+                    accessibilityLabel="Unmatch"
+                    hitSlop={12}
+                    style={{ marginLeft: SPACING.xs }}
+                  >
+                    <Ionicons name="close-circle-outline" size={20} color={COLORS.danger} />
+                  </Pressable>
+                </View>
+              )}
+            </Card>
+          );
+        }}
+      />
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: COLORS.background,
+  },
+  header: {
+    paddingHorizontal: SPACING.lg,
+    paddingTop: SPACING.sm,
+  },
+  title: {
+    fontSize: FONT_SIZES.xxl,
+    fontWeight: '800',
+    color: COLORS.text,
+    marginBottom: SPACING.md,
+  },
+  tabRow: {
+    flexDirection: 'row',
+    gap: SPACING.sm,
+    marginBottom: SPACING.md,
+  },
+  tab: {
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.xs + 2,
+    borderRadius: RADII.round,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.surface,
+  },
+  tabActive: {
+    backgroundColor: COLORS.primary,
+    borderColor: COLORS.primary,
+  },
+  tabText: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.textMuted,
+    fontWeight: '600',
+  },
+  tabTextActive: {
+    color: COLORS.white,
+  },
+  listContent: {
+    paddingHorizontal: SPACING.lg,
+    paddingBottom: SPACING.xxl,
+  },
+  emptyText: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.textMuted,
+    textAlign: 'center',
+    marginTop: SPACING.xl,
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+    marginBottom: SPACING.sm,
+  },
+  name: {
+    fontSize: FONT_SIZES.md,
+    fontWeight: '600',
+    color: COLORS.text,
+  },
+  time: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.textFaint,
+  },
+  chatPromptText: {
+    fontSize: 11,
+    color: COLORS.primary,
+    marginTop: 2,
+    fontWeight: '500',
+  },
+  matchRowActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+  },
+  chatIconBtn: {
+    padding: SPACING.xs,
+  },
+});

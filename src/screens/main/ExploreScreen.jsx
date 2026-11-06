@@ -1,0 +1,424 @@
+import React, { useEffect, useState } from 'react';
+import {
+  View,
+  Text,
+  FlatList,
+  StyleSheet,
+  TextInput,
+  Pressable,
+  RefreshControl,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { router } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import SkillCard from '../../components/skills/SkillCard';
+import BountyCard from '../../components/bounties/BountyCard';
+import CreateBountyModal from '../../components/bounties/CreateBountyModal';
+import LoadingSpinner from '../../components/ui/LoadingSpinner';
+import ErrorState from '../../components/ui/ErrorState';
+import EmptyState from '../../components/ui/EmptyState';
+import { useAuth } from '../../store/useAppHooks';
+import * as api from '../../services/api';
+import { bountyService } from '../../services/bountyService';
+import { COLORS, SPACING, FONT_SIZES, RADII, SKILL_CATEGORIES } from '../../utils/constants';
+import { notify, toast } from '../../utils/alert';
+
+export default function ExploreScreen() {
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
+  const [mode, setMode] = useState('skills'); // 'skills' | 'bounties'
+  const [searchInput, setSearchInput] = useState('');
+  const [search, setSearch] = useState('');
+  const [category, setCategory] = useState(null);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [submittingBounty, setSubmittingBounty] = useState(false);
+
+  useEffect(() => {
+    const timeout = setTimeout(() => setSearch(searchInput), 200);
+    return () => clearTimeout(timeout);
+  }, [searchInput]);
+
+  // Skills Query
+  const {
+    data: skills,
+    isPending: isSkillsPending,
+    error: skillsError,
+    isFetching: isSkillsFetching,
+    refetch: refetchSkills,
+  } = useQuery({
+    queryKey: ['skills', category ?? 'all', search ?? ''],
+    queryFn: () => api.getSkills({ category, search: search.trim() || undefined }),
+    enabled: Boolean(user && mode === 'skills'),
+    placeholderData: keepPreviousData,
+  });
+
+  // Bounties Query
+  const {
+    data: bounties = [],
+    isPending: isBountiesPending,
+    error: bountiesError,
+    isFetching: isBountiesFetching,
+    refetch: refetchBounties,
+  } = useQuery({
+    queryKey: ['bounties', category ?? 'all', search ?? ''],
+    queryFn: () => bountyService.getBounties({ category, search: search.trim() || undefined }),
+    enabled: Boolean(user && mode === 'bounties'),
+    placeholderData: keepPreviousData,
+  });
+
+  const handleCreateBounty = async (bountyData) => {
+    if (!user) return;
+    setSubmittingBounty(true);
+    try {
+      await bountyService.createBounty({
+        creatorId: user.user_id,
+        ...bountyData,
+      });
+      await queryClient.invalidateQueries({ queryKey: ['bounties'] });
+      setIsCreateModalOpen(false);
+      toast('Bounty Posted!', 'Your learning request is now visible to mentors in the community.');
+    } catch (err) {
+      notify('Could not post bounty', err.message || 'Please check the details and try again.');
+    } finally {
+      setSubmittingBounty(false);
+    }
+  };
+
+  const handleMakeOffer = async (bountyId, message) => {
+    if (!user) return;
+    await bountyService.makeOffer({
+      bountyId,
+      helperId: user.user_id,
+      message,
+    });
+    await queryClient.invalidateQueries({ queryKey: ['bounties'] });
+  };
+
+  const handleDeleteBounty = async (bountyId) => {
+    try {
+      await bountyService.deleteBounty(bountyId);
+      await queryClient.invalidateQueries({ queryKey: ['bounties'] });
+      toast('Bounty Deleted', 'Your request has been removed.');
+    } catch (err) {
+      notify('Error', err.message || 'Could not delete bounty.');
+    }
+  };
+
+  // Skill-trade proof: the creator accepts an offer to open a swap.
+  const handleAcceptOffer = async (bountyId, offerId) => {
+    try {
+      await bountyService.acceptOffer({ bountyId, offerId });
+      await queryClient.invalidateQueries({ queryKey: ['bounties'] });
+      toast('Offer accepted!', 'The skill swap has started — both sides now confirm the trade.');
+    } catch (err) {
+      notify('Error', err.message || 'Could not accept offer.');
+    }
+  };
+
+  // Each side confirms they did their part; completion releases +25 XP to both.
+  const handleConfirmTrade = async (tradeId) => {
+    if (!user) return;
+    try {
+      const trade = await bountyService.confirmTradeSide(tradeId);
+      await queryClient.invalidateQueries({ queryKey: ['bounties'] });
+      if (trade?.status === 'completed') {
+        await queryClient.invalidateQueries({ queryKey: ['user-stats'] });
+        await queryClient.invalidateQueries({ queryKey: ['wallet'] });
+        await queryClient.invalidateQueries({ queryKey: ['transactions'] });
+        toast('Skill trade confirmed!', 'Both sides verified the swap. You each earned +25 XP.');
+      } else {
+        toast('Trade confirmed', 'Waiting for your swap partner to confirm theirs.');
+      }
+    } catch (err) {
+      notify('Error', err.message || 'Could not confirm trade.');
+    }
+  };
+
+  const isBountiesMode = mode === 'bounties';
+  const currentError = isBountiesMode ? bountiesError : skillsError;
+  const currentRefetch = isBountiesMode ? refetchBounties : refetchSkills;
+  const isFetching = isBountiesMode ? isBountiesFetching : isSkillsFetching;
+  const isPending = isBountiesMode
+    ? isBountiesPending && bounties.length === 0
+    : isSkillsPending && !skills;
+
+  return (
+    <SafeAreaView style={styles.container} edges={['top']}>
+      <View style={styles.header}>
+        {/* Top Header Row with Mode Selector & Post Button */}
+        <View style={styles.topRow}>
+          <Text style={styles.title}>{isBountiesMode ? 'Bounty Board' : 'Explore Skills'}</Text>
+        </View>
+
+        {/* Mode Switcher Tabs */}
+        <View style={styles.segmentedControl}>
+          <Pressable
+            style={[styles.segment, !isBountiesMode && styles.segmentActive]}
+            onPress={() => setMode('skills')}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: !isBountiesMode }}
+          >
+            <Ionicons
+              name="sparkles"
+              size={16}
+              color={!isBountiesMode ? COLORS.primary : COLORS.textMuted}
+            />
+            <Text style={[styles.segmentText, !isBountiesMode && styles.segmentTextActive]}>
+              Skills Offered
+            </Text>
+          </Pressable>
+
+          <Pressable
+            style={[styles.segment, isBountiesMode && styles.segmentActive]}
+            onPress={() => setMode('bounties')}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: isBountiesMode }}
+          >
+            <Ionicons
+              name="help-buoy"
+              size={16}
+              color={isBountiesMode ? COLORS.primary : COLORS.textMuted}
+            />
+            <Text style={[styles.segmentText, isBountiesMode && styles.segmentTextActive]}>
+              Bounty Board
+            </Text>
+          </Pressable>
+        </View>
+
+        {/* Search Bar */}
+        <View style={styles.searchBar}>
+          <Ionicons name="search" size={18} color={COLORS.textFaint} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder={isBountiesMode ? 'Search requests' : 'Search skills'}
+            placeholderTextColor={COLORS.textFaint}
+            value={searchInput}
+            onChangeText={setSearchInput}
+          />
+        </View>
+
+        {/* Category Filter Chips */}
+        <FlatList
+          data={SKILL_CATEGORIES}
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          keyExtractor={(item) => item}
+          contentContainerStyle={styles.chipsRow}
+          renderItem={({ item }) => (
+            <Pressable
+              onPress={() => setCategory(category === item ? null : item)}
+              style={[styles.chip, category === item && styles.chipActive]}
+            >
+              <Text style={[styles.chipText, category === item && styles.chipTextActive]}>
+                {item}
+              </Text>
+            </Pressable>
+          )}
+        />
+      </View>
+
+      {/* Main Content Area */}
+      {currentError ? (
+        <ErrorState error={currentError} onRetry={currentRefetch} />
+      ) : isPending ? (
+        <LoadingSpinner label={isBountiesMode ? 'Loading bounties…' : 'Finding skills…'} />
+      ) : isBountiesMode ? (
+        <FlatList
+          data={bounties}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.listContent}
+          refreshControl={
+            <RefreshControl
+              refreshing={isFetching}
+              onRefresh={() => refetchBounties()}
+              tintColor={COLORS.primary}
+            />
+          }
+          ListEmptyComponent={
+            <EmptyState
+              icon="trophy-outline"
+              iconColor={COLORS.token}
+              iconBgColor={COLORS.tokenLight}
+              title="No open bounties yet"
+              subtitle="Need help with something? Tap Post Request below to create a bounty with a token or skill reward!"
+            />
+          }
+          renderItem={({ item }) => (
+            <BountyCard
+              bounty={item}
+              currentUserId={user?.user_id}
+              onMakeOffer={handleMakeOffer}
+              onDeleteBounty={handleDeleteBounty}
+              onAcceptOffer={handleAcceptOffer}
+              onConfirmTrade={handleConfirmTrade}
+            />
+          )}
+        />
+      ) : (
+        <FlatList
+          data={skills}
+          keyExtractor={(item) => item.skill_id}
+          contentContainerStyle={styles.listContent}
+          refreshControl={
+            <RefreshControl
+              refreshing={isFetching}
+              onRefresh={() => refetchSkills()}
+              tintColor={COLORS.primary}
+            />
+          }
+          ListEmptyComponent={
+            <EmptyState
+              icon="search-outline"
+              title="No matching skills yet"
+              subtitle="Try another search term or category."
+            />
+          }
+          renderItem={({ item }) => (
+            <SkillCard skill={item} onPress={() => router.push(`/skills/${item.skill_id}`)} />
+          )}
+        />
+      )}
+
+      {/* Floating post button (bounties mode only) */}
+      {isBountiesMode && (
+        <Pressable
+          style={styles.fabPostBtn}
+          onPress={() => setIsCreateModalOpen(true)}
+          accessibilityRole="button"
+          accessibilityLabel="Post a Bounty"
+        >
+          <Ionicons name="add" size={22} color={COLORS.white} />
+          <Text style={styles.postBountyBtnText}>Post Request</Text>
+        </Pressable>
+      )}
+
+      {/* Modal for posting new bounty */}
+      <CreateBountyModal
+        visible={isCreateModalOpen}
+        onClose={() => setIsCreateModalOpen(false)}
+        onSubmit={handleCreateBounty}
+        submitting={submittingBounty}
+      />
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: COLORS.background,
+  },
+  header: {
+    paddingHorizontal: SPACING.lg,
+    paddingTop: SPACING.sm,
+  },
+  topRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: SPACING.sm,
+  },
+  title: {
+    fontSize: FONT_SIZES.xxl,
+    fontWeight: '800',
+    color: COLORS.text,
+  },
+  postBountyBtnText: {
+    fontSize: FONT_SIZES.xs,
+    fontWeight: '700',
+    color: COLORS.white,
+  },
+  fabPostBtn: {
+    position: 'absolute',
+    right: SPACING.lg,
+    bottom: SPACING.xl,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: COLORS.primary,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.sm + 2,
+    borderRadius: RADII.round,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    elevation: 6,
+  },
+  segmentedControl: {
+    flexDirection: 'row',
+    backgroundColor: COLORS.surface,
+    padding: 4,
+    borderRadius: RADII.md,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    marginBottom: SPACING.md,
+  },
+  segment: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: SPACING.xs + 2,
+    borderRadius: RADII.sm,
+  },
+  segmentActive: {
+    backgroundColor: COLORS.primaryLight,
+  },
+  segmentText: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.textMuted,
+    fontWeight: '600',
+  },
+  segmentTextActive: {
+    color: COLORS.primary,
+    fontWeight: '700',
+  },
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+    backgroundColor: COLORS.surface,
+    borderRadius: RADII.md,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    paddingHorizontal: SPACING.md,
+    marginBottom: SPACING.md,
+  },
+  searchInput: {
+    flex: 1,
+    paddingVertical: SPACING.sm + 8,
+    fontSize: FONT_SIZES.md,
+    color: COLORS.text,
+  },
+  chipsRow: {
+    gap: SPACING.sm,
+    paddingBottom: SPACING.md,
+  },
+  chip: {
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.xs + 2,
+    borderRadius: RADII.round,
+    backgroundColor: COLORS.surface,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  chipActive: {
+    backgroundColor: COLORS.primary,
+    borderColor: COLORS.primary,
+  },
+  chipText: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.textMuted,
+    fontWeight: '600',
+  },
+  chipTextActive: {
+    color: COLORS.white,
+  },
+  listContent: {
+    paddingHorizontal: SPACING.lg,
+    paddingBottom: SPACING.xxl,
+  },
+});
