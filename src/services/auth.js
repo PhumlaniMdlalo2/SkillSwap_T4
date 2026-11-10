@@ -7,7 +7,7 @@ async function fetchProfile(authUser) {
   const { data, error } = await supabase
     .from('users')
     .select(
-      'user_id, name, avatar, bio, rating, review_count, xp, streak_weeks, last_active_week, created_at',
+      'user_id, name, avatar, bio, rating, review_count, xp, streak_weeks, last_active_week, created_at, onboarding_completed',
     )
     .eq('user_id', authUser.id)
     .maybeSingle();

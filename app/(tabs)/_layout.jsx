@@ -15,10 +15,11 @@ const ICONS = {
 };
 
 export default function TabsLayout() {
-  const { isAuthenticated, initializing } = useAuth();
+  const { user, isAuthenticated, initializing } = useAuth();
 
   if (initializing) return <LoadingSpinner />;
   if (!isAuthenticated) return <Redirect href="/(auth)/welcome" />;
+  if (user?.onboarding_completed === false) return <Redirect href="/(onboarding)/teach" />;
 
   return (
     <Tabs

@@ -422,3 +422,13 @@ export async function setStylePreferences(userId, prefs) {
   if (error) throw error;
   return data;
 }
+
+// Marks the 3-step onboarding flow as done, so the auth guards stop sending
+// the user back to it on the next launch.
+export async function completeOnboarding(userId) {
+  const { error } = await supabase
+    .from('users')
+    .update({ onboarding_completed: true })
+    .eq('user_id', userId);
+  if (error) throw error;
+}

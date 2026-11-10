@@ -30,7 +30,7 @@ const FORMAT_OPTIONS = [
 ];
 
 export default function OnboardingStyleScreen() {
-  const { user } = useAuth();
+  const { user, updateUser } = useAuth();
   const { from } = useLocalSearchParams();
   const isFirstTimeOnboarding = from === 'onboarding';
   const queryClient = useQueryClient();
@@ -92,6 +92,8 @@ export default function OnboardingStyleScreen() {
         learn_structure: learnStructure,
         learn_formats: learnFormats,
       });
+      await api.completeOnboarding(user.user_id);
+      updateUser({ ...user, onboarding_completed: true });
       // Compatibility is scored fresh on every fetch, but the swipe deck
       // is cached in the store for the app session — clear it so the
       // next visit to Skill Match picks up these updated preferences.
