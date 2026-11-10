@@ -34,7 +34,7 @@ export default function SwipeCard({
   nopeOpacityStyle,
 }) {
   const dimensionStyle = { width: cardWidth, height: cardHeight };
-  const photoHeight = cardHeight * 0.34;
+  const photoHeight = cardHeight * 0.42;
 
   const summary = [
     candidate.name,
@@ -57,7 +57,7 @@ export default function SwipeCard({
       accessibilityHint="Swipe to like or pass"
     >
       <View style={[styles.photoWrap, { height: photoHeight }]}>
-        <Image source={{ uri: candidate.photo }} style={styles.photo} />
+        <Image source={{ uri: candidate.photo }} style={styles.photo} resizeMode="contain" />
         <View style={styles.photoTopRow}>
           <Badge label={candidate.category} tone="neutral" />
           <View style={styles.ratingPill}>
@@ -177,11 +177,12 @@ const styles = StyleSheet.create({
   },
   photoWrap: {
     width: '100%',
+    overflow: 'hidden',
+    backgroundColor: COLORS.text,
   },
   photo: {
     width: '100%',
     height: '100%',
-    resizeMode: 'cover',
   },
   photoTopRow: {
     position: 'absolute',
